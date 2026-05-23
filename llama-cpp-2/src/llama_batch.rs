@@ -229,12 +229,14 @@ impl<'a> LlamaBatch<'a> {
     /// * `dim` - Embedding dimension per token
     /// * `positions` - Position encoding array for each token
     /// * `stride` - Optional position stride (e.g., Qwen3 uses 4x stride)
+    /// * `seq_id` - Sequence ID to assign to all tokens
     pub fn set_embd(
         &mut self,
         embd_data: &[f32],
         dim: usize,
         positions: &[llama_pos],
         stride: Option<i32>,
+        seq_id: i32,
     ) -> Result<(), BatchAddError> {
         let n_tokens = embd_data.len() / dim;
 
@@ -272,14 +274,19 @@ impl<'a> LlamaBatch<'a> {
             for i in 0..actual_n_tokens {
                 unsafe {
                     *n_seq_id_ptr.add(i) = 1;
-                    // seq_id[i] already allocated by llama_batch_init, write seq_id=0 into it
                     let seq_id_arr = *seq_id_ptr.add(i);
                     if !seq_id_arr.is_null() {
-                        *seq_id_arr = 0;
+                        *seq_id_arr = seq_id;
                     }
                     *logits_ptr.add(i) = if i == actual_n_tokens - 1 { 1 } else { 0 };
                 }
             }
+        }
+
+        // Track the last token's logits as initialized (matches add() behavior)
+        self.initialized_logits.clear();
+        if actual_n_tokens > 0 {
+            self.initialized_logits.push(actual_n_tokens as i32 - 1);
         }
 
         Ok(())

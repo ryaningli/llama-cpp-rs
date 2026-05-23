@@ -110,10 +110,12 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 - 创建 batch 时指定 `embd_dim > 0`，使 `llama_batch_init` 分配 embd 缓冲区
 - 原 `new()` 不变，代理到 `new_with_embd(..., 0, ...)`
 
-**`set_embd(embd_data, dim, positions, stride)`：**
+**`set_embd(embd_data, dim, positions, stride, seq_id)`：**
 - 将完整 embedding 向量、位置编码、seq_id、logits 一次性写入 batch
 - 支持 stride 位置编码（如 Qwen3 的 4x stride）
+- `seq_id` 参数指定序列 ID（用于 multi-sequence batch 场景）
 - 直接操作 `llama_batch` 已分配的 `embd`、`pos`、`seq_id` 等缓冲区
+- 更新 `initialized_logits` 以确保 `get_logits_ith()` 可正确读取最后一个 token 的 logits
 
 | 文件 | 改动 |
 |------|------|
