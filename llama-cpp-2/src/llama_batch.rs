@@ -229,14 +229,16 @@ impl<'a> LlamaBatch<'a> {
     /// * `dim` - Embedding dimension per token
     /// * `positions` - Position encoding array for each token
     /// * `stride` - Optional position stride (e.g., Qwen3 uses 4x stride)
-    /// * `seq_id` - Sequence ID to assign to all tokens
+    /// * `seq_ids` - Sequence IDs for each token. Two modes:
+    ///   - `&[id]` (length 1): all tokens share the same seq_id
+    ///   - `&[id0, id1, ...]` (length == actual_n_tokens): each token gets its own seq_id
     pub fn set_embd(
         &mut self,
         embd_data: &[f32],
         dim: usize,
         positions: &[llama_pos],
         stride: Option<i32>,
-        seq_id: i32,
+        seq_ids: &[i32],
     ) -> Result<(), BatchAddError> {
         let n_tokens = embd_data.len() / dim;
 
@@ -246,6 +248,11 @@ impl<'a> LlamaBatch<'a> {
         };
 
         if actual_n_tokens > self.allocated {
+            return Err(BatchAddError::InsufficientSpace(self.allocated));
+        }
+
+        // 验证 seq_ids 长度：必须为 1（所有 token 共享）或 actual_n_tokens（per-token）
+        if seq_ids.len() != 1 && seq_ids.len() != actual_n_tokens {
             return Err(BatchAddError::InsufficientSpace(self.allocated));
         }
 
@@ -272,11 +279,16 @@ impl<'a> LlamaBatch<'a> {
 
         if !n_seq_id_ptr.is_null() && !seq_id_ptr.is_null() && !logits_ptr.is_null() {
             for i in 0..actual_n_tokens {
+                let sid = if seq_ids.len() == 1 {
+                    seq_ids[0]
+                } else {
+                    seq_ids[i]
+                };
                 unsafe {
                     *n_seq_id_ptr.add(i) = 1;
                     let seq_id_arr = *seq_id_ptr.add(i);
                     if !seq_id_arr.is_null() {
-                        *seq_id_arr = seq_id;
+                        *seq_id_arr = sid;
                     }
                     *logits_ptr.add(i) = if i == actual_n_tokens - 1 { 1 } else { 0 };
                 }
@@ -290,6 +302,35 @@ impl<'a> LlamaBatch<'a> {
         }
 
         Ok(())
+    }
+
+    /// 设置指定 token 位置的 logits 标志
+    ///
+    /// 用于多序列 batch 场景，在 `set_embd()` 之后追加设置其他位置的 logits。
+    /// `set_embd()` 只设置最后一个 token 的 logits，当多个序列合并到同一个
+    /// batch 时，需要通过此方法为每个序列的最后一个 token 追加设置 logits。
+    ///
+    /// # 参数
+    /// * `idx` - token 在 batch 中的索引（0-based）
+    /// * `logits` - 是否启用 logits 计算
+    ///
+    /// # Panics
+    /// Panics if `idx` is negative.
+    pub fn set_logits_at(&mut self, idx: i32, logits: bool) {
+        let idx_usize = usize::try_from(idx).expect("idx must be non-negative");
+        if idx_usize >= self.allocated {
+            return;
+        }
+        unsafe {
+            self.llama_batch.logits.add(idx_usize).write(i8::from(logits));
+        }
+        if logits {
+            if !self.initialized_logits.contains(&idx) {
+                self.initialized_logits.push(idx);
+            }
+        } else {
+            self.initialized_logits.retain(|l| l != &idx);
+        }
     }
 }
 

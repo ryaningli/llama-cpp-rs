@@ -5,7 +5,7 @@
 
 ## 改动概览
 
-共修改 7 个源码文件（不含 Cargo.lock），新增 3 个 feature + 2 个 API，改进 backends 部署体验，修复 zigbuild 交叉编译兼容性。
+共修改 7 个源码文件（不含 Cargo.lock），新增 3 个 feature + 3 个 API，改进 backends 部署体验，修复 zigbuild 交叉编译兼容性。
 
 ### 1. 新增 feature: `dynamic-backends-no-variants`
 
@@ -102,7 +102,7 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 |------|------|
 | `Cargo.toml` | `hf-hub` 依赖改为 `default-features = false, features = ["rustls-tls", "tokio", "ureq"]` |
 
-### 7. 新增 API: `LlamaBatch::new_with_embd()` + `LlamaBatch::set_embd()`
+### 7. 新增 API: `LlamaBatch::new_with_embd()` + `LlamaBatch::set_embd()` + `LlamaBatch::set_logits_at()`
 
 为 embedding 输入场景（如 Qwen3 ASR 音频模型）添加批量设置嵌入数据的方法。
 
@@ -110,16 +110,23 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 - 创建 batch 时指定 `embd_dim > 0`，使 `llama_batch_init` 分配 embd 缓冲区
 - 原 `new()` 不变，代理到 `new_with_embd(..., 0, ...)`
 
-**`set_embd(embd_data, dim, positions, stride, seq_id)`：**
+**`set_embd(embd_data, dim, positions, stride, seq_ids)`：**
 - 将完整 embedding 向量、位置编码、seq_id、logits 一次性写入 batch
 - 支持 stride 位置编码（如 Qwen3 的 4x stride）
-- `seq_id` 参数指定序列 ID（用于 multi-sequence batch 场景）
+- `seq_ids` 参数支持两种模式：
+  - `&[id]`（长度 1）：所有 token 共享同一 seq_id
+  - `&[id0, id1, ...]`（长度 == n_tokens）：每个 token 独立指定 seq_id
 - 直接操作 `llama_batch` 已分配的 `embd`、`pos`、`seq_id` 等缓冲区
 - 更新 `initialized_logits` 以确保 `get_logits_ith()` 可正确读取最后一个 token 的 logits
 
+**`set_logits_at(idx, logits)`：**
+- 设置指定 token 位置的 logits 标志
+- 用于多序列 batch 场景：`set_embd()` 只设置最后一个 token 的 logits，当多个序列合并到同一个 batch 时，需要通过此方法为每个序列的最后一个 token 追加设置 logits
+- 同步更新 `initialized_logits`
+
 | 文件 | 改动 |
 |------|------|
-| `llama-cpp-2/src/llama_batch.rs` | `new()` 代理到 `new_with_embd`，新增 `new_with_embd()` 构造函数和 `set_embd()` 方法 |
+| `llama-cpp-2/src/llama_batch.rs` | `new()` 代理到 `new_with_embd`，新增 `new_with_embd()` 构造函数、`set_embd()` 方法和 `set_logits_at()` 方法 |
 
 ## 代码改动约束
 
@@ -156,7 +163,7 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 | hard_link 修复 | `build.rs:~1165-1180` | 每处 2 行改 2 行 |
 | load_backends 重写 | `llama_backend.rs:~200-279` | 函数替换（区域独立） |
 | feature 定义 | 各 `Cargo.toml` | 纯行追加 |
-| batch embd API | `llama_batch.rs:~148-284` | 纯新增（`new_with_embd` + `set_embd`） |
+| batch embd API | `llama_batch.rs:~148-340` | 纯新增（`new_with_embd` + `set_embd` + `set_logits_at`） |
 
 ## 合入注意事项
 
