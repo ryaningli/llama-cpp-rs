@@ -251,7 +251,7 @@ impl<'a> LlamaBatch<'a> {
             return Err(BatchAddError::InsufficientSpace(self.allocated));
         }
 
-        // 验证 seq_ids 长度：必须为 1（所有 token 共享）或 actual_n_tokens（per-token）
+        // Validate seq_ids length: must be 1 (all tokens share) or actual_n_tokens (per-token)
         if seq_ids.len() != 1 && seq_ids.len() != actual_n_tokens {
             return Err(BatchAddError::InsufficientSpace(self.allocated));
         }
@@ -304,15 +304,16 @@ impl<'a> LlamaBatch<'a> {
         Ok(())
     }
 
-    /// 设置指定 token 位置的 logits 标志
+    /// Set the logits flag at a specific token position.
     ///
-    /// 用于多序列 batch 场景，在 `set_embd()` 之后追加设置其他位置的 logits。
-    /// `set_embd()` 只设置最后一个 token 的 logits，当多个序列合并到同一个
-    /// batch 时，需要通过此方法为每个序列的最后一个 token 追加设置 logits。
+    /// Used in multi-sequence batch scenarios to enable logits at additional positions
+    /// after calling `set_embd()`. Since `set_embd()` only sets logits for the last
+    /// token, this method is needed to enable logits for the last token of each
+    /// individual sequence when multiple sequences are merged into one batch.
     ///
-    /// # 参数
-    /// * `idx` - token 在 batch 中的索引（0-based）
-    /// * `logits` - 是否启用 logits 计算
+    /// # Arguments
+    /// * `idx` - Token index in the batch (0-based)
+    /// * `logits` - Whether to enable logits computation
     ///
     /// # Panics
     /// Panics if `idx` is negative.
