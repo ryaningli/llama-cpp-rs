@@ -558,6 +558,14 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=ggml");
         println!("cargo:rustc-link-lib=dylib=ggml-base");
 
+        // Upstream's `common` feature compiles wrapper_common.cpp, which references
+        // common_fit_params / json_schema_to_grammar etc. Those symbols live in the
+        // separate libllama-common.so (not a NEEDED of libllama.so), so link it here
+        // when the feature is on. Mirrors the CMake branch's static=llama-common link.
+        if cfg!(feature = "common") {
+            println!("cargo:rustc-link-lib=dylib=llama-common");
+        }
+
         if cfg!(feature = "mtmd") {
             println!("cargo:rustc-link-lib=dylib=mtmd");
         }
