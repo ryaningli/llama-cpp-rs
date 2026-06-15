@@ -7,8 +7,6 @@
 
 共修改 7 个源码文件（不含 Cargo.lock），新增 3 个 feature + 3 个 API，改进 backends 部署体验，修复 zigbuild 交叉编译兼容性。
 
-> **合并状态（2026-06-15）：** 已将上游 `utilityai/llama-cpp-rs` main（0.1.147+，含新增 `common` feature、移除 OpenAI API、`params_fit`/`memory_breakdown_print` shim 等）合并进 `etsllm-dep`。合并引出一处必要修正——prebuilt 分支需在 `common` feature 开启时链接 `libllama-common.so`（见第 2 节备注）。`llama_backend.rs`、`llama_batch.rs`、`examples/simple/*` 上游未改动，零冲突。
-
 ### 1. 新增 feature: `dynamic-backends-no-variants`
 
 基于 `dynamic-backends`，区别是不设置 CMake 的 `GGML_CPU_ALL_VARIANTS=ON`，
