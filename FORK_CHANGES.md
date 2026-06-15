@@ -7,6 +7,8 @@
 
 共修改 7 个源码文件（不含 Cargo.lock），新增 3 个 feature + 3 个 API，改进 backends 部署体验，修复 zigbuild 交叉编译兼容性。
 
+> **合并状态（2026-06-15）：** 已将上游 `utilityai/llama-cpp-rs` main（0.1.147+，含新增 `common` feature、移除 OpenAI API、`params_fit`/`memory_breakdown_print` shim 等）合并进 `etsllm-dep`。合并引出一处必要修正——prebuilt 分支需在 `common` feature 开启时链接 `libllama-common.so`（见第 2 节备注）。`llama_backend.rs`、`llama_batch.rs`、`examples/simple/*` 上游未改动，零冲突。
+
 ### 1. 新增 feature: `dynamic-backends-no-variants`
 
 基于 `dynamic-backends`，区别是不设置 CMake 的 `GGML_CPU_ALL_VARIANTS=ON`，
@@ -53,7 +55,9 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 
 | 文件 | 改动 |
 |------|------|
-| `llama-cpp-sys-2/build.rs` | 在 `common_wrapper_build.compile()` 前后各插入一个 `cfg!(feature = "prebuilt-dynamic-backends")` 块：生成 `build-info.cpp` + 声明链接库 + `return` 跳过 CMake |
+| `llama-cpp-sys-2/build.rs` | 插入两个 `cfg!(feature = "prebuilt-dynamic-backends")` 块：生成 `build-info.cpp`（位于上游 `common` feature 块之后，独立于该 feature）+ 声明链接库（含 `common` feature 开启时链接 `llama-common`）+ `return` 跳过 CMake |
+
+> **注意（合并上游 0.1.147+ 后）：** 上游将 `common_wrapper_build` 的编译移入了新增的 `common` feature 块内。合并后 prebuilt 块的位置在 `common` 块**之后**，不再围绕 `compile()` 前后插入。上游 `b16e8dd` 让 `wrapper_common.cpp` 依赖 common 符号（`common_fit_params`/`json_schema_to_grammar` 等），这些符号位于独立的 `libllama-common.so`（不是 `libllama.so` 的 NEEDED），因此 prebuilt 链接块在 `common` feature 开启（默认）时必须额外声明链接 `llama-common`，否则最终二进制 `undefined reference`。
 
 ### 3. Backends 与共享库统一目录部署
 
@@ -156,34 +160,38 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 
 | 区域 | 文件:行范围 | 改动性质 |
 |------|-------------|----------|
-| prebuilt build-info | `build.rs:~522-539` | 纯新增 |
-| prebuilt 链接 | `build.rs:~543-580` | 纯新增 |
-| backends CMake 配置 | `build.rs:~879-900` | 最小修改（3 行改 5 行） |
-| backends_dir 输出 | `build.rs:~900` | 1 行修改 |
-| hard_link 修复 | `build.rs:~1165-1180` | 每处 2 行改 2 行 |
-| load_backends 重写 | `llama_backend.rs:~200-279` | 函数替换（区域独立） |
+| prebuilt build-info | `build.rs:~531-548` | 纯新增（位于上游 `common` feature 块之后） |
+| prebuilt 链接 | `build.rs:~550-595` | 纯新增（含 `common` feature 开启时链接 `llama-common`） |
+| backends CMake 配置 | `build.rs:~905-915` | 最小修改（`GGML_CPU_ALL_VARIANTS` 条件化 + `GGML_BACKEND_DIR` 指向 `lib`） |
+| hard_link 修复 | `build.rs:~1196-1211` | 每处 2 行改 2 行 |
+| load_backends 重写 | `llama_backend.rs` | 函数替换（区域独立，上游未改动） |
 | feature 定义 | 各 `Cargo.toml` | 纯行追加 |
-| batch embd API | `llama_batch.rs:~148-340` | 纯新增（`new_with_embd` + `set_embd` + `set_logits_at`） |
+| batch embd API | `llama_batch.rs` | 纯新增（`new_with_embd` + `set_embd` + `set_logits_at`，上游未改动） |
 
 ## 合入注意事项
 
 ### 上游合并时可能冲突的位置
 
-1. **`llama-cpp-sys-2/build.rs` 第 879-900 行**
+1. **`llama-cpp-sys-2/build.rs` 第 ~905-915 行**
    - `dynamic-backends` CMake 配置块
    - 我们改动：`GGML_BACKEND_DIR` 指向 `out/lib/` 而非 `out/backends/`，`GGML_CPU_ALL_VARIANTS` 条件化
    - 如果上游修改了此区域的 CMake 参数，需要保留我们的改动
 
-2. **`llama-cpp-sys-2/build.rs` 第 1165-1180 行**
+2. **`llama-cpp-sys-2/build.rs` 第 ~1196-1211 行**
    - hard_link 复制逻辑
    - 如果上游重构了这段代码（比如改用 `std::fs::copy`），合并时优先采用上游方式，
      但需确保也修复了 `EEXIST` 竞态问题
 
-3. **`llama-cpp-2/src/llama_backend.rs` 第 200-279 行**
+3. **`llama-cpp-sys-2/build.rs` 第 ~531-595 行（prebuilt 块）**
+   - prebuilt `build-info.cpp` 生成块 + 链接声明块（含 `common` feature 时链接 `llama-common`）+ early return
+   - 该块紧跟在上游 `common` feature 块（~505-529）之后。如果上游再次调整 `common` 块边界或 `wrapper_common` 编译逻辑，需重新对齐 prebuilt 块位置，并确认 `llama-common` 链接声明仍覆盖 `wrapper_common.cpp` 的 common 符号依赖
+
+4. **`llama-cpp-2/src/llama_backend.rs`**
    - `find_lib_dir()`、`load_backends()` 重写
+   - 上游自 0.1.147 以来未改动此文件（2026-06 合并验证），冲突风险低
    - 如果上游修改了此区域的 API，需要保留 dladdr 回退逻辑和多策略搜索
 
-4. **`examples/simple/Cargo.toml` 和 `examples/simple/src/main.rs`**
+5. **`examples/simple/Cargo.toml` 和 `examples/simple/src/main.rs`**
    - 上游可能重构 example 结构或添加新 feature
    - 合并时确保 feature 透传和 `load_backends()` 调用不丢失
 
