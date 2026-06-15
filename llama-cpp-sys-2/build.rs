@@ -278,9 +278,17 @@ fn main() {
         .allowlist_type("gguf_.*")
         .allowlist_function("llama_.*")
         .allowlist_type("llama_.*")
-        .allowlist_function("llama_rs_.*")
-        .allowlist_type("llama_rs_.*")
         .prepend_enum_name(false);
+
+    // The `llama_rs_*` symbols are emitted by `wrapper_common.cpp`, which is
+    // only compiled (and only has its header included from `wrapper.h`) when
+    // the `common` feature is enabled.
+    if cfg!(feature = "common") {
+        bindings_builder = bindings_builder
+            .clang_arg("-DLLAMA_RS_BUILD_COMMON")
+            .allowlist_function("llama_rs_.*")
+            .allowlist_type("llama_rs_.*");
+    }
 
     // Configure mtmd feature if enabled
     if cfg!(feature = "mtmd") {
@@ -489,34 +497,35 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=wrapper_common.h");
     println!("cargo:rerun-if-changed=wrapper_common.cpp");
-    println!("cargo:rerun-if-changed=wrapper_oai.h");
-    println!("cargo:rerun-if-changed=wrapper_oai.cpp");
     println!("cargo:rerun-if-changed=wrapper_utils.h");
     println!("cargo:rerun-if-changed=wrapper_mtmd.h");
 
     debug_log!("Bindings Created");
 
-    let mut common_wrapper_build = cc::Build::new();
-    common_wrapper_build
-        .cpp(true)
-        .file("wrapper_common.cpp")
-        .file("wrapper_oai.cpp")
-        .include(&llama_src)
-        .include(llama_src.join("common"))
-        .include(llama_src.join("include"))
-        .include(llama_src.join("ggml/include"))
-        .include(llama_src.join("vendor"))
-        .flag_if_supported("-std=c++17")
-        .pic(true);
+    if cfg!(feature = "common") {
+        let mut common_wrapper_build = cc::Build::new();
+        common_wrapper_build
+            .cpp(true)
+            .file("wrapper_common.cpp")
+            .include(&llama_src)
+            .include(llama_src.join("common"))
+            .include(llama_src.join("include"))
+            .include(llama_src.join("ggml/include"))
+            .include(llama_src.join("vendor"))
+            .flag_if_supported("-std=c++17")
+            .pic(true);
 
-    if matches!(target_os, TargetOs::Windows(WindowsVariant::Msvc)) {
-        common_wrapper_build.flag("/std:c++17");
-    }
+        if matches!(target_os, TargetOs::Windows(WindowsVariant::Msvc)) {
+            common_wrapper_build.flag("/std:c++17");
+        }
 
-    // When static-stdcxx is enabled on Android, suppress the cc crate's automatic
-    // C++ stdlib linking (which defaults to c++_shared) so we can link c++_static instead.
-    if matches!(target_os, TargetOs::Android) && cfg!(feature = "static-stdcxx") {
-        common_wrapper_build.cpp_link_stdlib(None);
+        // When static-stdcxx is enabled on Android, suppress the cc crate's automatic
+        // C++ stdlib linking (which defaults to c++_shared) so we can link c++_static instead.
+        if matches!(target_os, TargetOs::Android) && cfg!(feature = "static-stdcxx") {
+            common_wrapper_build.cpp_link_stdlib(None);
+        }
+
+        common_wrapper_build.compile("llama_cpp_sys_2_common_wrapper");
     }
 
     // When using prebuilt libraries, generate build-info.cpp (normally done by CMake)
@@ -537,8 +546,6 @@ fn main() {
             .pic(true);
         build_info_build.compile("llama_cpp_sys_2_build_info");
     }
-
-    common_wrapper_build.compile("llama_cpp_sys_2_common_wrapper");
 
     // When using prebuilt libraries, skip CMake entirely.
     // Users must provide the library search path via RUSTFLAGS or .cargo/config.toml, e.g.:
@@ -590,7 +597,17 @@ fn main() {
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
     config.define("LLAMA_BUILD_TOOLS", "OFF");
-    config.define("LLAMA_BUILD_COMMON", "ON");
+    // `app` (the unified `llama` binary) defaults to ON when llama.cpp is the
+    // top-level CMake project; it pulls in server/tool internals we don't build.
+    config.define("LLAMA_BUILD_APP", "OFF");
+    config.define(
+        "LLAMA_BUILD_COMMON",
+        if cfg!(feature = "common") {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
     config.define("LLAMA_CURL", "OFF");
 
     // Pass CMAKE_ environment variables down to CMake
@@ -1074,7 +1091,7 @@ fn main() {
     assert_ne!(llama_libs.len(), 0);
 
     let common_lib_dir = out_dir.join("build").join("common");
-    if common_lib_dir.is_dir() {
+    if cfg!(feature = "common") && common_lib_dir.is_dir() {
         println!(
             "cargo:rustc-link-search=native={}",
             common_lib_dir.display()
@@ -1086,7 +1103,10 @@ fn main() {
                 common_profile_dir.display()
             );
         }
-        println!("cargo:rustc-link-lib=static=common");
+        // Newer llama.cpp renamed the common static library `common` ->
+        // `llama-common` and split base utilities into `llama-common-base`.
+        println!("cargo:rustc-link-lib=static=llama-common");
+        println!("cargo:rustc-link-lib=static=llama-common-base");
     }
 
     if cfg!(feature = "system-ggml") {
