@@ -890,6 +890,53 @@ fn main() {
         config.define("GGML_HIP", "ON");
     }
 
+    if cfg!(feature = "cann") {
+        config.define("GGML_CANN", "ON");
+
+        // Support for specifying CANN installation directory
+        if let Ok(cann_dir) = env::var("CANN_INSTALL_DIR") {
+            config.define("CANN_INSTALL_DIR", &cann_dir);
+        }
+
+        // --- SOC type resolution ---
+        // Precedence: SOC feature > SOC_TYPE env > npu-smi auto-detection (in CMake).
+        let soc_variants: &[(&str, &str)] = &[
+            ("cann-310p", "Ascend310P"),
+            ("cann-910",  "Ascend910"),
+            ("cann-910b", "Ascend910B"),
+            ("cann-910c", "Ascend910C"),
+        ];
+
+        let active: Vec<&(&str, &str)> = soc_variants
+            .iter()
+            .filter(|(feat, _)| match *feat {
+                "cann-310p" => cfg!(feature = "cann-310p"),
+                "cann-910"  => cfg!(feature = "cann-910"),
+                "cann-910b" => cfg!(feature = "cann-910b"),
+                "cann-910c" => cfg!(feature = "cann-910c"),
+                _ => false,
+            })
+            .collect();
+
+        if active.len() > 1 {
+            let names: Vec<&str> = active.iter().map(|(f, _)| *f).collect();
+            panic!(
+                "llama-cpp-sys-2: mutually exclusive CANN SOC features enabled: {}. \
+                 Pick at most one (e.g. `--features cann-310p`).",
+                names.join(", ")
+            );
+        }
+
+        if let Some((_, soc)) = active.first() {
+            config.define("SOC_TYPE", soc);
+        } else if let Ok(soc) = env::var("SOC_TYPE") {
+            // Fallback: user passes SOC_TYPE env (useful for new SOCs not yet
+            // enumerated as features, or for scripted builds).
+            config.define("SOC_TYPE", &soc);
+        }
+        // else: neither SOC feature nor env set — CMake will call npu-smi.
+    }
+
     // Android doesn't have OpenMP support AFAICT and openmp is a default feature. Do this here
     // rather than modifying the defaults in Cargo.toml just in case someone enables the OpenMP feature
     // and tries to build for Android anyway.
@@ -1083,6 +1130,41 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=amdhip64");
         println!("cargo:rustc-link-lib=dylib=rocblas");
         println!("cargo:rustc-link-lib=dylib=hipblas");
+    }
+
+    if cfg!(feature = "cann") && !build_shared_libs {
+        // Re-run build script if CANN environment variables change
+        println!("cargo:rerun-if-env-changed=ASCEND_TOOLKIT_HOME");
+        println!("cargo:rerun-if-env-changed=CANN_INSTALL_DIR");
+
+        // Find CANN installation
+        let cann_path = env::var("ASCEND_TOOLKIT_HOME")
+            .or_else(|_| env::var("CANN_INSTALL_DIR"))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "CANN toolkit not found. Please set ASCEND_TOOLKIT_HOME or CANN_INSTALL_DIR environment variable.\n\
+                     Make sure to source set_var.sh from CANN toolkit installation.\n\
+                     Download from: https://www.hiascend.com/software/cann"
+                );
+            });
+
+        let cann_lib = Path::new(&cann_path).join("lib64");
+        if !cann_lib.exists() {
+            panic!(
+                "CANN libraries not found at: {}\n\
+                 Please install CANN toolkit or set ASCEND_TOOLKIT_HOME/CANN_INSTALL_DIR environment variable.\n\
+                 Download from: https://www.hiascend.com/software/cann",
+                cann_lib.display()
+            );
+        }
+
+        println!("cargo:rustc-link-search=native={}", cann_lib.display());
+
+        // Link CANN libraries
+        println!("cargo:rustc-link-lib=dylib=ascendcl");
+        println!("cargo:rustc-link-lib=dylib=nnopbase");
+        println!("cargo:rustc-link-lib=dylib=opapi");
+        println!("cargo:rustc-link-lib=dylib=acl_op_compiler");
     }
 
     // Link libraries

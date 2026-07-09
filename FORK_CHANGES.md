@@ -130,6 +130,53 @@ build.rs 不硬编码任何路径。运行时 backends 通过 `dladdr` 自动发
 |------|------|
 | `llama-cpp-2/src/llama_batch.rs` | `new()` 代理到 `new_with_embd`，新增 `new_with_embd()` 构造函数、`set_embd()` 方法和 `set_logits_at()` 方法 |
 
+### 8. 新增 features: `cann` + 4 个 SOC 变体
+
+为华为昇腾 CANN NPU 后端暴露 feature 开关。基于 llama.cpp 上游已有的 `GGML_CANN` CMake backend，本改动仅在 Rust 侧做 feature 透传 + CMake define 注入，不修改 llama.cpp 子模块内任何文件。
+
+**Feature 矩阵：**
+
+| Feature | 含义 | 是否 imply `cann` | 是否自动传 `SOC_TYPE` |
+|---------|------|-----------------|---------------------|
+| `cann` | 启用 CANN 后端，依赖 `ASCEND_TOOLKIT_HOME` / `CANN_INSTALL_DIR` env | — | 否（依赖 `SOC_TYPE` env 或 `npu-smi` 自动检测） |
+| `cann-310p` | Ascend 310P | 是 | `Ascend310P` |
+| `cann-910` | Ascend 910 | 是 | `Ascend910` |
+| `cann-910b` | Ascend 910B | 是 | `Ascend910B` |
+| `cann-910c` | Ascend 910C | 是 | `Ascend910C` |
+
+**修改文件链：**
+
+| 文件 | 改动 |
+|------|------|
+| `llama-cpp-sys-2/Cargo.toml` | +4 行 feature 定义（`cann` 已在先前会话添加）+ 4 个 SOC 变体 |
+| `llama-cpp-2/Cargo.toml` | +4 行 feature 透传 |
+| `examples/{simple,embeddings,mtmd,reranker}/Cargo.toml` | 各 +4 行 feature 透传 |
+| `llama-cpp-sys-2/build.rs` | 重写 `if cfg!(feature = "cann")` CMake 配置块：mut-ex panic + SOC 解析逻辑 |
+
+**互斥检查：** 同时启用多个 `cann-*` feature 时 build.rs panic。错误信息示例：
+
+```
+llama-cpp-sys-2: mutually exclusive CANN SOC features enabled: cann-310p, cann-910b. \
+Pick at most one (e.g. `--features cann-310p`).
+```
+
+**链接逻辑：** 沿用先前会话添加的静态链接分支（link `ascendcl` / `nnopbase` / `opapi` / `acl_op_compiler`）。本任务未改该部分。
+
+**SOC_TYPE 优先级：** SOC feature > `SOC_TYPE` 环境变量 > `npu-smi` 自动检测（CMake 内）。
+
+**典型构建命令：**
+
+```bash
+# 交叉编译到 Ascend 310P (aarch64)
+export ASCEND_TOOLKIT_HOME=/path/to/cann-arm
+export RUSTFLAGS="-L /path/to/cann-arm/lib64 -L /path/to/openmp-arm/lib"
+cargo zigbuild --release --features cann-310p --target aarch64-unknown-linux-gnu -p simple
+
+# 本机构建（NPU 可用）
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cargo build --release --features cann-910b -p simple
+```
+
 ## 代码改动约束
 
 > 所有后续改动必须遵循以下原则，以保持与上游 `utilityai/llama-cpp-rs` 的可合入性。

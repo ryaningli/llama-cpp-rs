@@ -49,6 +49,7 @@ include = [
     "/llama.cpp/ggml/src/ggml-metal/**/*",
     "/llama.cpp/ggml/src/ggml-vulkan/**/*",
     "/llama.cpp/ggml/src/ggml-hip/**/*",
+    "/llama.cpp/ggml/src/ggml-cann/**/*",
 
     "/llama.cpp/ggml/src/llamafile/sgemm.h",
     "/llama.cpp/ggml/src/llamafile/sgemm.cpp",
@@ -95,6 +96,11 @@ dynamic-link = []
 vulkan = []
 openmp = []
 rocm = []
+cann = []
+cann-310p = ["cann"]
+cann-910 = ["cann"]
+cann-910b = ["cann"]
+cann-910c = ["cann"]
 # Only has an impact on Android.
 shared-stdcxx = []
 static-stdcxx = []
