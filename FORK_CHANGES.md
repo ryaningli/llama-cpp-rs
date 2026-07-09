@@ -160,7 +160,20 @@ llama-cpp-sys-2: mutually exclusive CANN SOC features enabled: cann-310p, cann-9
 Pick at most one (e.g. `--features cann-310p`).
 ```
 
-**链接逻辑：** 沿用先前会话添加的静态链接分支（link `ascendcl` / `nnopbase` / `opapi` / `acl_op_compiler`）。本任务未改该部分。
+**链接逻辑：** 动态链接 CANN 运行时库。经过测试验证，最小依赖集为 3 个库：
+
+- `libascendcl.so` — ACL 核心运行时（aclInit, aclrtSetDevice 等）
+- `libnnopbase.so` — 张量管理 API（aclCreateTensorList 等，被 opapi 依赖）
+- `libopapi.so` — 神经网络算子实现（aclnnMatMul, aclnnAdd 等 100+ 个算子）
+
+**已移除：** `libacl_op_compiler.so`（4→3 优化）。经测试 ggml-cann 不使用其 API（aclopCompile 等），可省略。构建时仍需提供这 3 个 `.so` 文件用于符号解析，运行时目标机器也需部署相同库。
+
+```rust
+// build.rs 中的链接配置
+println!("cargo:rustc-link-lib=dylib=ascendcl");
+println!("cargo:rustc-link-lib=dylib=nnopbase");
+println!("cargo:rustc-link-lib=dylib=opapi");
+```
 
 **SOC_TYPE 优先级：** SOC feature > `SOC_TYPE` 环境变量 > `npu-smi` 自动检测（CMake 内）。
 

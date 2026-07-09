@@ -1160,11 +1160,10 @@ fn main() {
 
         println!("cargo:rustc-link-search=native={}", cann_lib.display());
 
-        // Link CANN libraries
+        // Link CANN libraries (minimal set)
         println!("cargo:rustc-link-lib=dylib=ascendcl");
         println!("cargo:rustc-link-lib=dylib=nnopbase");
         println!("cargo:rustc-link-lib=dylib=opapi");
-        println!("cargo:rustc-link-lib=dylib=acl_op_compiler");
     }
 
     // Link libraries
