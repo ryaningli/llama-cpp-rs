@@ -145,8 +145,28 @@ impl<'a> LlamaBatch<'a> {
     /// Panics if `n_tokens` is greater than `i32::MAX`.
     #[must_use]
     pub fn new(n_tokens: usize, n_seq_max: i32) -> Self {
+        Self::new_with_embd(n_tokens, 0, n_seq_max)
+    }
+
+    /// Create a new `LlamaBatch` with embedding dimension, for use with [`Self::set_embd`].
+    ///
+    /// When `embd_dim > 0`, the batch will allocate an embedding buffer suitable for
+    /// embedding-based inference (e.g., audio/ASR models).
+    ///
+    /// # Arguments
+    ///
+    /// - `n_tokens`: the maximum number of tokens that can be added to the batch
+    /// - `embd_dim`: the embedding dimension per token (0 = token-based batch, no embd buffer)
+    /// - `n_seq_max`: the maximum number of sequences that can be added to the batch
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_tokens` or `embd_dim` is greater than `i32::MAX`.
+    #[must_use]
+    pub fn new_with_embd(n_tokens: usize, embd_dim: usize, n_seq_max: i32) -> Self {
         let n_tokens_i32 = i32::try_from(n_tokens).expect("cannot fit n_tokens into a i32");
-        let batch = unsafe { llama_batch_init(n_tokens_i32, 0, n_seq_max) };
+        let embd_dim_i32 = i32::try_from(embd_dim).expect("cannot fit embd_dim into a i32");
+        let batch = unsafe { llama_batch_init(n_tokens_i32, embd_dim_i32, n_seq_max) };
 
         LlamaBatch {
             allocated: n_tokens,
@@ -195,6 +215,123 @@ impl<'a> LlamaBatch<'a> {
     #[must_use]
     pub fn n_tokens(&self) -> i32 {
         self.llama_batch.n_tokens
+    }
+
+    /// Batch-set embedding data into the batch, for audio/embedding input scenarios (e.g., Qwen3 ASR).
+    ///
+    /// Directly writes to the underlying `llama_batch` `embd`, `pos`, `n_seq_id`, `seq_id`,
+    /// and `logits` fields. After this call, `n_tokens` is set to `embd_data.len() / dim`
+    /// (or `positions.len() / stride` if stride is provided).
+    ///
+    /// # Arguments
+    ///
+    /// * `embd_data` - Flattened embedding vectors (length = n_tokens * dim)
+    /// * `dim` - Embedding dimension per token
+    /// * `positions` - Position encoding array for each token
+    /// * `stride` - Optional position stride (e.g., Qwen3 uses 4x stride)
+    /// * `seq_ids` - Sequence IDs for each token. Two modes:
+    ///   - `&[id]` (length 1): all tokens share the same seq_id
+    ///   - `&[id0, id1, ...]` (length == actual_n_tokens): each token gets its own seq_id
+    pub fn set_embd(
+        &mut self,
+        embd_data: &[f32],
+        dim: usize,
+        positions: &[llama_pos],
+        stride: Option<i32>,
+        seq_ids: &[i32],
+    ) -> Result<(), BatchAddError> {
+        let n_tokens = embd_data.len() / dim;
+
+        let actual_n_tokens = match stride {
+            Some(s) => positions.len() / (s as usize),
+            None => n_tokens,
+        };
+
+        if actual_n_tokens > self.allocated {
+            return Err(BatchAddError::InsufficientSpace(self.allocated));
+        }
+
+        // Validate seq_ids length: must be 1 (all tokens share) or actual_n_tokens (per-token)
+        if seq_ids.len() != 1 && seq_ids.len() != actual_n_tokens {
+            return Err(BatchAddError::InsufficientSpace(self.allocated));
+        }
+
+        let embd_ptr = self.llama_batch.embd;
+        if embd_ptr.is_null() {
+            return Err(BatchAddError::EmptyBuffer);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(embd_data.as_ptr(), embd_ptr, embd_data.len());
+        }
+
+        let pos_ptr = self.llama_batch.pos;
+        if !pos_ptr.is_null() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(positions.as_ptr(), pos_ptr, positions.len());
+            }
+        }
+
+        self.llama_batch.n_tokens = actual_n_tokens as i32;
+
+        let n_seq_id_ptr = self.llama_batch.n_seq_id;
+        let seq_id_ptr = self.llama_batch.seq_id;
+        let logits_ptr = self.llama_batch.logits;
+
+        if !n_seq_id_ptr.is_null() && !seq_id_ptr.is_null() && !logits_ptr.is_null() {
+            for i in 0..actual_n_tokens {
+                let sid = if seq_ids.len() == 1 {
+                    seq_ids[0]
+                } else {
+                    seq_ids[i]
+                };
+                unsafe {
+                    *n_seq_id_ptr.add(i) = 1;
+                    let seq_id_arr = *seq_id_ptr.add(i);
+                    if !seq_id_arr.is_null() {
+                        *seq_id_arr = sid;
+                    }
+                    *logits_ptr.add(i) = if i == actual_n_tokens - 1 { 1 } else { 0 };
+                }
+            }
+        }
+
+        // Track the last token's logits as initialized (matches add() behavior)
+        self.initialized_logits.clear();
+        if actual_n_tokens > 0 {
+            self.initialized_logits.push(actual_n_tokens as i32 - 1);
+        }
+
+        Ok(())
+    }
+
+    /// Set the logits flag at a specific token position.
+    ///
+    /// Used in multi-sequence batch scenarios to enable logits at additional positions
+    /// after calling `set_embd()`. Since `set_embd()` only sets logits for the last
+    /// token, this method is needed to enable logits for the last token of each
+    /// individual sequence when multiple sequences are merged into one batch.
+    ///
+    /// # Arguments
+    /// * `idx` - Token index in the batch (0-based)
+    /// * `logits` - Whether to enable logits computation
+    ///
+    /// # Panics
+    /// Panics if `idx` is negative.
+    pub fn set_logits_at(&mut self, idx: i32, logits: bool) {
+        let idx_usize = usize::try_from(idx).expect("idx must be non-negative");
+        if idx_usize >= self.allocated {
+            return;
+        }
+        unsafe {
+            self.llama_batch.logits.add(idx_usize).write(i8::from(logits));
+        }
+        if logits {
+            if !self.initialized_logits.contains(&idx) {
+                self.initialized_logits.push(idx);
+            }
+        } else {
+            self.initialized_logits.retain(|l| l != &idx);
+        }
     }
 }
 

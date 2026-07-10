@@ -13,6 +13,11 @@ encoding_rs = { workspace = true }
 cuda = ["llama-cpp-2/cuda"]
 metal = ["llama-cpp-2/metal"]
 vulkan = ["llama-cpp-2/vulkan"]
+cann = ["llama-cpp-2/cann"]
+cann-310p = ["llama-cpp-2/cann-310p"]
+cann-910 = ["llama-cpp-2/cann-910"]
+cann-910b = ["llama-cpp-2/cann-910b"]
+cann-910c = ["llama-cpp-2/cann-910c"]
 mkl = ["llama-cpp-2/mkl"]
 
 [lints]

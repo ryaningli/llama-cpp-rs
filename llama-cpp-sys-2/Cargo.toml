@@ -50,6 +50,7 @@ include = [
     "/llama.cpp/ggml/src/ggml-vulkan/**/*",
     "/llama.cpp/ggml/src/ggml-opencl/**/*",
     "/llama.cpp/ggml/src/ggml-hip/**/*",
+    "/llama.cpp/ggml/src/ggml-cann/**/*",
 
     "/llama.cpp/ggml/src/llamafile/sgemm.h",
     "/llama.cpp/ggml/src/llamafile/sgemm.cpp",
@@ -106,6 +107,15 @@ openmp = []
 # downstreams that ship self-contained binaries while keeping OpenMP enabled.
 static-openmp = ["openmp"]
 rocm = []
+# Huawei Ascend CANN NPU backend (GGML_CANN=ON). Requires the CANN toolkit on
+# the build host: set ASCEND_TOOLKIT_HOME (or CANN_INSTALL_DIR) so the build
+# script can locate lib64 for linking. The SOC-specific variants below each
+# imply `cann` and pre-set SOC_TYPE, so cross-builds don't need npu-smi.
+cann = []
+cann-310p = ["cann"]
+cann-910 = ["cann"]
+cann-910b = ["cann"]
+cann-910c = ["cann"]
 # Link the C++ standard library statically where the target toolchain supports
 # it. Currently used by Android and Linux GNU/musl targets.
 static-stdcxx = []
