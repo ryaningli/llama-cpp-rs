@@ -932,14 +932,8 @@ fn main() {
             })
             .collect();
 
-        if active.len() > 1 {
-            let names: Vec<&str> = active.iter().map(|(f, _)| *f).collect();
-            panic!(
-                "llama-cpp-sys-2: mutually exclusive CANN SOC features enabled: {}. \
-                 Pick at most one (e.g. `--features cann-310p`).",
-                names.join(", ")
-            );
-        }
+        // 多个 SOC 变体同时启用时（如 `--all-features`），由下方 active.first()
+        // 静默取列表首个，不 panic。生产构建应只指定单个 SOC（如 `--features cann-910b`）。
 
         if let Some((_, soc)) = active.first() {
             config.define("SOC_TYPE", soc);

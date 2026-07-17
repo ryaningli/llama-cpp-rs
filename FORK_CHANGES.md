@@ -36,16 +36,19 @@ running on the build host.
 
 ### `SOC_TYPE` resolution precedence
 
-`SOC feature` > `SOC_TYPE` env var > `npu-smi` autodetect (inside CMake).
+First active SOC feature (in declaration order) > `SOC_TYPE` env var > `npu-smi` autodetect (inside CMake). When multiple SOC features are active, only the first is used — see [Multiple SOC features](#multiple-soc-features) below.
 
-### Mutual exclusivity
+### Multiple SOC features
 
-Enabling more than one `cann-*` SOC feature aborts the build with a clear error:
+If more than one `cann-*` SOC feature is enabled (as `cargo --all-features`
+does), the build does **not** abort. The first matching variant in declaration
+order is selected silently and the rest are ignored:
 
-```
-llama-cpp-sys-2: mutually exclusive CANN SOC features enabled: cann-310p, cann-910b.
-Pick at most one (e.g. `--features cann-310p`).
-```
+declaration order: `cann-310p` → `cann-910` → `cann-910b` → `cann-910c`.
+
+Production builds should still pass exactly one SOC (e.g. `--features cann-910b`)
+to avoid building for the wrong card; the silent pick exists only so that
+`--all-features` type-checks without a host NPU.
 
 ### Files
 
