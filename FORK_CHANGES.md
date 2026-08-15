@@ -1,12 +1,12 @@
 # Fork Changes
 
 > This file documents this fork's changes relative to upstream
-> `utilityai/llama-cpp-rs` (based on tag `0.1.151`), so future upstream merges
+> `utilityai/llama-cpp-rs` (based on tag `0.1.154`), so future upstream merges
 > can assess conflicts and regression risk.
 
 ## Overview
 
-Two self-contained, additive changes layered on top of upstream `0.1.151`:
+Two self-contained, additive changes layered on top of upstream `0.1.154`:
 
 1. **CANN (Huawei Ascend NPU) backend** — Cargo feature flags + build-script wiring
 2. **`LlamaBatch` embedding API** — three new methods for embedding/audio input
@@ -129,3 +129,16 @@ low-conflict:
 - **`llama_batch.rs`** additions are appended within the existing `impl` block;
   only `new()`'s body changes (it now calls `new_with_embd`). Upstream has not
   touched the `new()` / `n_tokens()` region, so conflict risk is low.
+
+### Merge log
+
+| Date       | Upstream tag | Submodule  | Result                                                        |
+|------------|--------------|------------|---------------------------------------------------------------|
+| 2026-08-06 | `0.1.154`    | `b10200`   | Clean 3-way merge, **zero conflicts** (5 files auto-merged: `llama-cpp-sys-2/{Cargo.toml,build.rs}`, `llama-cpp-2/Cargo.toml`, `examples/{simple,embeddings}/Cargo.toml`). CANN blocks verified in-place after `rocm`/`hipblas`; upstream `GGML_*` env passthrough (0.1.153) is compatible with the CANN `SOC_TYPE` precedence. Fork commit `59dda3a` retained. |
+
+The merge was validated with `git merge-tree --write-tree` (dry run) and then
+performed as a real merge on branch `etsllm-dep-v2`; the merged tree kept the
+CANN CMake/link blocks at their expected positions and upstream's b10200 port
+intact. Smoke checks after merge: default-feature build and the `cann-*`
+feature matrix type-check; a full CANN link build still requires an Ascend
+toolkit host (see [Build examples](#build-examples)).
