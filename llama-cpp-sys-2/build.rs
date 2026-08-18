@@ -1292,29 +1292,64 @@ fn main() {
         // Re-run build script if CANN environment variables change
         println!("cargo:rerun-if-env-changed=ASCEND_TOOLKIT_HOME");
         println!("cargo:rerun-if-env-changed=CANN_INSTALL_DIR");
+        println!("cargo:rerun-if-env-changed=CANN_LIB_DIR");
 
-        // Find CANN installation
-        let cann_path = env::var("ASCEND_TOOLKIT_HOME")
-            .or_else(|_| env::var("CANN_INSTALL_DIR"))
-            .unwrap_or_else(|_| {
-                panic!(
-                    "CANN toolkit not found. Please set ASCEND_TOOLKIT_HOME or CANN_INSTALL_DIR environment variable.\n\
-                     Make sure to source set_var.sh from CANN toolkit installation.\n\
-                     Download from: https://www.hiascend.com/software/cann"
-                );
-            });
+        // Link-dir resolution, in priority order:
+        // 1. CANN_LIB_DIR — explicit directory holding *target-arch* CANN libs.
+        //    For cross builds where the toolkit located via ASCEND_TOOLKIT_HOME
+        //    is a host-arch install and no other link path provides the
+        //    target-arch libs. A wrong-arch dir here fails fast (see
+        //    check_cann_lib_arch).
+        // 2. <toolkit>/lib64 — validated against the target architecture. On
+        //    mismatch (host-arch toolkit under cross build) the path is skipped
+        //    with a warning: the -l flags below stay, and the target-arch libs
+        //    resolve from other link paths or CANN_LIB_DIR. Emitting the
+        //    wrong-arch path would only poison the link search order.
+        let link_dir = match env::var("CANN_LIB_DIR") {
+            Ok(dir) if !dir.is_empty() => {
+                let dir = PathBuf::from(dir);
+                if !dir.is_dir() {
+                    panic!(
+                        "CANN_LIB_DIR is not an existing directory: {}",
+                        dir.display()
+                    );
+                }
+                dir
+            }
+            _ => {
+                // Find CANN installation
+                let cann_path = env::var("ASCEND_TOOLKIT_HOME")
+                    .or_else(|_| env::var("CANN_INSTALL_DIR"))
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "CANN toolkit not found. Please set ASCEND_TOOLKIT_HOME or CANN_INSTALL_DIR environment variable.\n\
+                             Make sure to source set_var.sh from CANN toolkit installation.\n\
+                             For cross builds with a host-arch toolkit, set CANN_LIB_DIR to a directory with target-arch CANN libs.\n\
+                             Download from: https://www.hiascend.com/software/cann"
+                        );
+                    });
 
-        let cann_lib = Path::new(&cann_path).join("lib64");
-        if !cann_lib.exists() {
-            panic!(
-                "CANN libraries not found at: {}\n\
-                 Please install CANN toolkit or set ASCEND_TOOLKIT_HOME/CANN_INSTALL_DIR environment variable.\n\
-                 Download from: https://www.hiascend.com/software/cann",
-                cann_lib.display()
-            );
+                let cann_lib = Path::new(&cann_path).join("lib64");
+                if !cann_lib.exists() {
+                    panic!(
+                        "CANN libraries not found at: {}\n\
+                         Please install CANN toolkit or set ASCEND_TOOLKIT_HOME/CANN_INSTALL_DIR environment variable.\n\
+                         Download from: https://www.hiascend.com/software/cann",
+                        cann_lib.display()
+                    );
+                }
+                cann_lib
+            }
+        };
+
+        let explicit = env::var_os("CANN_LIB_DIR")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let emit_search = check_cann_lib_arch(&link_dir, &target_triple, explicit);
+
+        if emit_search {
+            println!("cargo:rustc-link-search=native={}", link_dir.display());
         }
-
-        println!("cargo:rustc-link-search=native={}", cann_lib.display());
 
         // Link CANN libraries (minimal set, verified against ggml-cann's symbol usage)
         println!("cargo:rustc-link-lib=dylib=ascendcl");
@@ -1506,5 +1541,95 @@ fn main() {
                 std::fs::hard_link(asset.clone(), dst).unwrap();
             }
         }
+    }
+}
+
+/// CANN link-dir architecture check: the first CANN lib present in `dir` is
+/// probed (the dir may legitimately hold only part of the set; missing libs
+/// resolve from other link paths). Returns whether the directory should be
+/// emitted as a link-search path.
+///
+/// - `explicit` (dir came from CANN_LIB_DIR): an arch mismatch is a hard error
+///   — the user named this directory, so a wrong-arch one is a config error
+///   worth failing fast on.
+/// - otherwise (dir derived from the toolkit): a mismatch downgrades to a
+///   warning and the path is skipped. This covers cross builds against a
+///   host-arch toolkit: its lib64/ can never satisfy the link, and the
+///   target-arch libs are expected from other link paths (e.g. prebuilt
+///   copies provided by a dependent crate's build script) or CANN_LIB_DIR.
+fn check_cann_lib_arch(dir: &Path, target: &str, explicit: bool) -> bool {
+    let want = if target.contains("aarch64") {
+        183 // EM_AARCH64
+    } else if target.contains("x86_64") {
+        62 // EM_X86_64
+    } else {
+        // CANN only supports x86_64/aarch64 targets; keep legacy behavior for
+        // anything else.
+        println!("cargo:warning=CANN link dir arch check skipped for target {target}");
+        return true;
+    };
+
+    let probe = ["libascendcl.so", "libnnopbase.so", "libopapi.so"]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.exists());
+    let Some(probe) = probe else {
+        println!(
+            "cargo:warning=no CANN libs (ascendcl/nnopbase/opapi) found in {}, emitting link-search anyway",
+            dir.display()
+        );
+        return true;
+    };
+
+    match read_elf_machine(&probe) {
+        Some(m) if m == want => true,
+        Some(m) if explicit => panic!(
+            "CANN lib arch mismatch: {} is {} but target is {target} ({}).\n\
+             A CANN toolkit of a different architecture cannot satisfy the link.\n\
+             Set CANN_LIB_DIR to a directory with target-arch CANN libs and retry.",
+            probe.display(),
+            elf_arch_name(m),
+            elf_arch_name(want)
+        ),
+        Some(m) => {
+            println!(
+                "cargo:warning=CANN lib arch mismatch: {} is {} but target is {target} ({}); \
+                 skipping this link path (host-arch toolkit under cross build?), \
+                 target-arch libs must come from another link path or CANN_LIB_DIR",
+                probe.display(),
+                elf_arch_name(m),
+                elf_arch_name(want)
+            );
+            false
+        }
+        None => {
+            println!(
+                "cargo:warning=could not read ELF header of {}, skipping arch check",
+                probe.display()
+            );
+            true
+        }
+    }
+}
+
+/// Read the ELF `e_machine` field (header offset 18, little-endian) of a file.
+fn read_elf_machine(path: &Path) -> Option<u16> {
+    use std::io::Read;
+
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut hdr = [0u8; 20];
+    f.read_exact(&mut hdr).ok()?;
+    if hdr[..4] != [0x7f, b'E', b'L', b'F'] {
+        return None;
+    }
+    Some(u16::from_le_bytes([hdr[18], hdr[19]]))
+}
+
+/// Human-readable arch name for the ELF machine constants used above.
+fn elf_arch_name(machine: u16) -> &'static str {
+    match machine {
+        183 => "aarch64",
+        62 => "x86_64",
+        _ => "unknown",
     }
 }

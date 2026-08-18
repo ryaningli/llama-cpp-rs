@@ -62,9 +62,20 @@ to avoid building for the wrong card; the silent pick exists only so that
 ### Linking
 
 The CANN link block runs under `cfg!(feature = "cann") && !build_shared_libs`.
-It locates the toolkit via `ASCEND_TOOLKIT_HOME` (falling back to
-`CANN_INSTALL_DIR`), expects a `lib64/` directory underneath, and links the
-minimal verified set (3 libraries): `ascendcl`, `nnopbase`, `opapi`.
+It links the minimal verified set (3 libraries): `ascendcl`, `nnopbase`,
+`opapi`, resolved from the first applicable link dir:
+
+1. `CANN_LIB_DIR` — explicit directory holding **target-arch** CANN libs. Its
+   architecture is validated (ELF `e_machine` of the first CANN lib found);
+   a mismatch fails the build immediately with a pointer to `CANN_LIB_DIR`.
+2. `<toolkit>/lib64` (toolkit from `ASCEND_TOOLKIT_HOME`, falling back to
+   `CANN_INSTALL_DIR`) — validated the same way. On mismatch (a host-arch
+   toolkit under a cross build) the path is **skipped with a warning** while
+   the `-l` flags stay: the wrong-arch `lib64/` can never satisfy the link,
+   and emitting it would only poison the link search order (lld takes the
+   first match and hard-errors on an incompatible ELF). Target-arch libs
+   must then come from another `-L` path (e.g. prebuilt copies added by a
+   dependent crate's build script) or from `CANN_LIB_DIR`.
 
 ```rust
 println!("cargo:rustc-link-lib=dylib=ascendcl");
@@ -72,10 +83,10 @@ println!("cargo:rustc-link-lib=dylib=nnopbase");
 println!("cargo:rustc-link-lib=dylib=opapi");
 ```
 
-Build-time and run-time libraries must match the **target** architecture — an
-x86_64 host CANN toolkit cannot link against an aarch64 target (the linker
-rejects the incompatible ELF). Provide target-arch `.so` files via `RUSTFLAGS`
-and deploy the same set on the target machine.
+This split is deliberate for cross builds against a host-arch toolkit: the
+CMake phase keeps using that toolkit (it needs the host-side ascendc
+compiler and headers), while the link phase takes its libraries from a
+target-arch source. Deploy the same target-arch set on the target machine.
 
 ### Build examples
 
@@ -84,9 +95,17 @@ and deploy the same set on the target machine.
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cargo build --release --features cann-910b -p simple
 
-# Cross-compile to Ascend 310P (aarch64); provide target-arch CANN libs
+# Cross-compile to Ascend 310P (aarch64) with a target-arch (cann-arm) toolkit:
+# lib64/ is aarch64 and passes the arch check
 export ASCEND_TOOLKIT_HOME=/path/to/cann-arm
-export RUSTFLAGS="-L /path/to/cann-arm/lib64 -L /path/to/openmp-arm/lib"
+export RUSTFLAGS="-L /path/to/openmp-arm/lib"
+cargo zigbuild --release --features cann-310p --target aarch64-unknown-linux-gnu -p simple
+
+# Cross-compile against a host-arch (x86_64) toolkit: CMake uses it for the
+# ascendc compiler; CANN_LIB_DIR points the linker at target-arch libs
+export ASCEND_TOOLKIT_HOME=/path/to/cann-x86
+export CANN_LIB_DIR=/path/to/target-arch-cann-libs
+export RUSTFLAGS="-L /path/to/openmp-arm/lib"
 cargo zigbuild --release --features cann-310p --target aarch64-unknown-linux-gnu -p simple
 ```
 
