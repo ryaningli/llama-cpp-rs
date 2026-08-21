@@ -348,6 +348,28 @@ impl MtmdContext {
             Err(MtmdEncodeError::EncodeFailure(result))
         }
     }
+
+    /// Borrow the output embeddings produced by the last successful
+    /// [`MtmdContext::encode_chunk`] call.
+    ///
+    /// The buffer is owned by the mtmd context and stays valid only until the
+    /// next encode on this context, so callers must copy the data before any
+    /// further encode. The C API returns a bare pointer with no length, so the
+    /// caller supplies `len` (`chunk.n_tokens() * n_embd` of the text model).
+    ///
+    /// Returns `None` when the underlying pointer is null (no encode has run
+    /// or the last encode failed).
+    pub fn get_output_embd(&self, len: usize) -> Option<&[f32]> {
+        let ptr = unsafe { llama_cpp_sys_2::mtmd_get_output_embd(self.context.as_ptr()) };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: ptr points to `len` f32 elements owned by the context (see
+        // mtmd.h: "output memory is allocated by the context, valid until next
+        // process() call"); we borrow it for the lifetime of `&self`, and the
+        // caller must not mutate the context before dropping the slice.
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+    }
 }
 
 impl Drop for MtmdContext {

@@ -135,6 +135,18 @@ instead of token ids (e.g. audio/ASR models such as Qwen3 ASR).
 
 ---
 
+## mtmd output embeddings (2026-08-21)
+
+Expose the audio/image embedding output buffer so callers can run the mmproj
+tower standalone (encode chunks themselves, then feed embeddings into their own
+llama.cpp batch path) instead of going through `mtmd_helper_eval_chunks`.
+
+| File | Change |
+|---|---|
+| `llama-cpp-2/src/mtmd.rs` | +`MtmdContext::get_output_embd(&self, len: usize) -> Option<&[f32]>` borrowing the C buffer of the last `encode_chunk` (caller-supplied length; additive, no upstream code touched). |
+
+---
+
 ## Upstream-merge notes
 
 Both changes are additive and avoid restructuring upstream code, to keep merges
