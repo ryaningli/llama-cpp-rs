@@ -147,6 +147,20 @@ llama.cpp batch path) instead of going through `mtmd_helper_eval_chunks`.
 
 ---
 
+## mtmd log redirection in `send_logs_to_tracing` (2026-08-21)
+
+mtmd/clip logging (`clip_model_loader`, tower load info) goes through a
+separate global callback (`mtmd_log_set`), not `llama_log_set` — so callers
+of `send_logs_to_tracing` still saw raw mtmd loader logs on stderr. Redirect
+it with the same `logs_to_trace` callback, reusing the ggml state (mtmd LOG
+macros emit GGML_LOG_LEVEL-graded complete lines).
+
+| File | Change |
+|---|---|
+| `llama-cpp-2/src/lib.rs` | `send_logs_to_tracing` additionally calls `llama_cpp_sys_2::mtmd_log_set(Some(logs_to_trace), ggml_heap_state)` behind `#[cfg(feature = "mtmd")]` (one statement inside the existing `unsafe` block; no upstream code touched). |
+
+---
+
 ## Upstream-merge notes
 
 Both changes are additive and avoid restructuring upstream code, to keep merges

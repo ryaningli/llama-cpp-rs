@@ -631,5 +631,11 @@ pub fn send_logs_to_tracing(options: LogOptions) {
         // GGML has to be set after llama since setting llama sets ggml as well.
         llama_cpp_sys_2::llama_log_set(Some(logs_to_trace), llama_heap_state as *mut _);
         llama_cpp_sys_2::ggml_log_set(Some(logs_to_trace), ggml_heap_state as *mut _);
+        // etsllm: mtmd/clip logging (clip_model_loader, etc.) is governed by a separate
+        // global callback (`mtmd_log_set`), so redirect it here as well. It reuses the
+        // ggml state because mtmd's LOG macros emit GGML_LOG_LEVEL-graded, complete
+        // lines, matching the ggml log family.
+        #[cfg(feature = "mtmd")]
+        llama_cpp_sys_2::mtmd_log_set(Some(logs_to_trace), ggml_heap_state as *mut _);
     }
 }
