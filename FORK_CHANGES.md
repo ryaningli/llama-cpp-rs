@@ -161,6 +161,21 @@ macros emit GGML_LOG_LEVEL-graded complete lines).
 
 ---
 
+## mtmd single-chunk eval helper (2026-09-02)
+
+Expose `mtmd_helper_eval_chunk_single` as a safe method for interleaved
+multimodal prefill (llama.cpp server's slot-loop pattern): the caller batches
+text chunks itself, while each image/audio chunk goes through this helper
+because M-RoPE 4-plane positions cannot share a batch with single-plane text
+positions. Non-causal attention setup, M-RoPE planes and `n_batch` splitting
+are handled inside the C helper; `logits_last` is forced to `false`.
+
+| File | Change |
+|---|---|
+| `llama-cpp-2/src/mtmd.rs` | +`MtmdContext::eval_chunk_single(&self, lctx, chunk, n_past, seq_id, n_batch) -> Result<llama_pos, MtmdEvalError>` appended within the existing `impl MtmdContext` block (additive, no upstream code touched). |
+
+---
+
 ## Upstream-merge notes
 
 Both changes are additive and avoid restructuring upstream code, to keep merges

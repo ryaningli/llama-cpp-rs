@@ -370,6 +370,67 @@ impl MtmdContext {
         // caller must not mutate the context before dropping the slice.
         Some(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
+
+    /// Process a single image/audio chunk end-to-end: encode it with the multimodal
+    /// context, then decode the resulting embeddings into the llama context.
+    ///
+    /// This is the per-chunk building block for interleaved multimodal prefill
+    /// (mirrors llama.cpp server's slot loop): text chunks are expected to be
+    /// batched by the caller into the unified decode batch, while media chunks go
+    /// through this helper because M-RoPE positions use a 4-plane layout that
+    /// cannot be mixed with single-plane text positions in one batch.
+    ///
+    /// Handles non-causal attention setup, M-RoPE position planes and n_batch
+    /// splitting internally. `logits_last` is forced to `false` (media chunks never
+    /// produce logits in the interleaved flow).
+    ///
+    /// # Arguments
+    ///
+    /// * `lctx` - The llama context to decode into
+    /// * `chunk` - The media chunk to process
+    /// * `n_past` - Current sequence position (M-RoPE aware)
+    /// * `seq_id` - Sequence id (slot id) for the KV cache
+    /// * `n_batch` - Logical batch size cap for the embedding decode
+    ///
+    /// # Returns
+    ///
+    /// The new `n_past` (advanced by the chunk's `n_pos`) on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MtmdEvalError::EvalFailure` if encoding or decoding fails.
+    ///
+    /// # Safety contract
+    ///
+    /// This function is NOT thread-safe: must be called from the thread that owns
+    /// both the mtmd context and the llama context.
+    pub fn eval_chunk_single(
+        &self,
+        lctx: &mut LlamaContext<'_>,
+        chunk: &MtmdInputChunk,
+        n_past: llama_cpp_sys_2::llama_pos,
+        seq_id: llama_cpp_sys_2::llama_seq_id,
+        n_batch: i32,
+    ) -> Result<llama_cpp_sys_2::llama_pos, MtmdEvalError> {
+        let mut new_n_past: llama_cpp_sys_2::llama_pos = 0;
+        let result = unsafe {
+            llama_cpp_sys_2::mtmd_helper_eval_chunk_single(
+                self.context.as_ptr(),
+                lctx.context.as_ptr(),
+                chunk.chunk.as_ptr(),
+                n_past,
+                seq_id,
+                n_batch,
+                /* logits_last = */ false,
+                &raw mut new_n_past,
+            )
+        };
+        if result == 0 {
+            Ok(new_n_past)
+        } else {
+            Err(MtmdEvalError::EvalFailure(result))
+        }
+    }
 }
 
 impl Drop for MtmdContext {
